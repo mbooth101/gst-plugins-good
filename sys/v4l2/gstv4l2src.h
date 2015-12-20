@@ -62,6 +62,7 @@ struct _GstV4l2Src
 
   GstClockTime ctrl_time;
   struct v4l2_rect in_size;
+  struct v4l2_rect crop;
 };
 
 struct _GstV4l2SrcClass
