@@ -2,6 +2,7 @@
  *
  * Copyright (C) 2001-2002 Ronald Bultje <rbultje@ronald.bitfreak.net>
  *               2006 Edgard Lima <edgard.lima@indt.org.br>
+ * Copyright (C) 2015, Renesas Electronics Corporation
  *
  * gstv4l2src.c: Video4Linux2 source element
  *
@@ -464,6 +465,13 @@ gst_v4l2src_decide_allocation (GstBaseSrc * bsrc, GstQuery * query)
   GstV4l2Src *src = GST_V4L2SRC (bsrc);
   gboolean ret = FALSE;
 
+#ifdef CONT_FRAME_CAPTURE
+  /* RCarVIN driver support 2 transmission modes:
+   * Single frame capture mode: require 3 or less buffers
+   * Continuous frame capture mode: require 4 or more buffers
+   */
+  src->v4l2object->min_buffers_for_capture = 4;
+#endif
   if (gst_v4l2_object_decide_allocation (src->v4l2object, query))
     ret = GST_BASE_SRC_CLASS (parent_class)->decide_allocation (bsrc, query);
 

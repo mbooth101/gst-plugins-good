@@ -2,6 +2,7 @@
  *
  * Copyright (C) 2001-2002 Ronald Bultje <rbultje@ronald.bitfreak.net>
  *               2006 Edgard Lima <edgard.lima@indt.org.br>
+ * Copyright (C) 2015, Renesas Electronics Corporation
  *
  * gstv4l2object.c: base class for V4L2 elements
  *
@@ -43,6 +44,7 @@
 #include "gst/gst-i18n-plugin.h"
 
 #include <gst/video/video.h>
+#include "gstv4l2src.h"
 
 GST_DEBUG_CATEGORY_EXTERN (v4l2_debug);
 #define GST_CAT_DEFAULT v4l2_debug
@@ -445,6 +447,8 @@ gst_v4l2_object_new (GstElement * element,
   v4l2object->n_v4l2_planes = 0;
 
   v4l2object->no_initial_format = FALSE;
+
+  v4l2object->min_buffers_for_capture = 0;
 
   return v4l2object;
 }
@@ -3281,8 +3285,6 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
     GST_DEBUG_OBJECT (obj->element, "driver require a minimum of %d buffers",
         ctl.value);
     obj->min_buffers_for_capture = ctl.value;
-  } else {
-    obj->min_buffers_for_capture = 0;
   }
 
   /* If pushing from our own pool, configure it with queried minimum,
