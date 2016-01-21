@@ -3328,8 +3328,16 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
     min = MAX (min, GST_V4L2_MIN_BUFFERS);
 
     /* To import we need the other pool to hold at least own_min */
-    if (obj->pool == pool)
-      min += own_min;
+    if (obj->pool == pool) {
+      if (GST_IS_V4L2SRC (obj->element) == TRUE &&
+          obj->mode == GST_V4L2_IO_USERPTR)
+        /* In capture case and userptr mode, number of buffer belong to
+         * downstream (got through querry downstream pool)
+         */
+        min = own_min;
+      else
+        min += own_min;
+    }
   }
 
   /* Request a bigger max, if one was suggested but it's too small */
