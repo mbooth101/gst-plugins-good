@@ -298,14 +298,6 @@ if test "x${enable_cont_fr_capture}" = "xyes"; then
   AC_DEFINE(CONT_FRAME_CAPTURE, 1, [Define if you enable option --enable-cont-frame-capture])
 fi
 
-dnl check for using VIN
-AC_ARG_WITH([rcar-vin],
-             [AS_HELP_STRING([--with-rcar-vin],[Use with RCar VIN driver]),],[with_rcar_vin=true],
-             [with_rcar_vin=false]
-             )
-if test "x${with_rcar_vin}" = "xtrue"; then
-  AC_DEFINE(WITH_VIN, 1, [Define if you enable option --with-rcar-vin])
-fi
 
 # set by AG_GST_PARSE_SUBSYSTEM_DISABLES above
 dnl make sure it doesn't complain about unused variables if debugging is disabled

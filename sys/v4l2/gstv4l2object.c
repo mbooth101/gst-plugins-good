@@ -1125,13 +1125,7 @@ gst_v4l2_object_v4l2fourcc_to_video_format (guint32 fourcc)
       format = GST_VIDEO_FORMAT_BGR;
       break;
     case V4L2_PIX_FMT_RGB32:
-#ifdef WITH_VIN
-      /* Compensate for the interpretation difference of
-         colorspace definition between VIN and GStreamer */
-      format = GST_VIDEO_FORMAT_BGRx;
-#else
       format = GST_VIDEO_FORMAT_xRGB;
-#endif
       break;
     case V4L2_PIX_FMT_BGR32:
       format = GST_VIDEO_FORMAT_BGRx;
@@ -1492,13 +1486,7 @@ gst_v4l2_object_get_caps_info (GstV4l2Object * v4l2object, GstCaps * caps,
         break;
       case GST_VIDEO_FORMAT_BGRx:
       case GST_VIDEO_FORMAT_BGRA:
-#ifdef WITH_VIN
-        /* Compensate for the interpretation difference of
-           colorspace definition between VIN and GStreamer */
-        fourcc = V4L2_PIX_FMT_RGB32;
-#else
         fourcc = V4L2_PIX_FMT_BGR32;
-#endif
         break;
       case GST_VIDEO_FORMAT_GRAY8:
         fourcc = V4L2_PIX_FMT_GREY;
