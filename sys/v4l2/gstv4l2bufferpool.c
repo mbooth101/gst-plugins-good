@@ -1440,6 +1440,8 @@ gst_v4l2_buffer_pool_acquire_buffer (GstBufferPool * bpool, GstBuffer ** buffer,
             GstBuffer *v4l2buf;
             GstMemory *v4l2mem;
             GstMemory *mmngrmem;
+            GstVideoMeta *metav4l2;
+            GstVideoMeta *metammngr;
             gint v4l2fd;
             gint mmngrfd = 0;
             gint i;
@@ -1476,6 +1478,15 @@ gst_v4l2_buffer_pool_acquire_buffer (GstBufferPool * bpool, GstBuffer ** buffer,
               if (mmngrbuf) {
                 v4l2buf = *buffer;
                 *buffer = mmngrbuf;
+                metav4l2 = gst_buffer_get_video_meta (v4l2buf);
+                metammngr = gst_buffer_get_video_meta (*buffer);
+                if (!metammngr && metav4l2) {
+                  /* mmngrbuf must have metadata for downstreams need to map frame */
+                  GST_DEBUG_OBJECT (pool, " Add metadata for mmngrbuf");
+                  gst_buffer_add_video_meta_full (*buffer, metav4l2->flags,
+                      metav4l2->format, metav4l2->width, metav4l2->height,
+                      metav4l2->n_planes, metav4l2->offset, metav4l2->stride);
+                }
                 /* Backup v4l2buffer for queue buf */
                 gst_atomic_queue_push (pool->v4l2buf, v4l2buf);
               } else {
