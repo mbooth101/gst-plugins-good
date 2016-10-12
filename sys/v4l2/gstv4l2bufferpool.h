@@ -3,6 +3,7 @@
  * Copyright (C) 2001-2002 Ronald Bultje <rbultje@ronald.bitfreak.net>
  *               2006 Edgard Lima <edgard.lima@indt.org.br>
  *               2009 Texas Instruments, Inc - http://www.ti.com/
+ * Copyright (C) 2016, Renesas Electronics Corporation
  *
  * gstv4l2bufferpool.h V4L2 buffer pool class
  *
@@ -86,6 +87,13 @@ struct _GstV4l2BufferPool
   gboolean flushing;
 
   GstBuffer *buffers[VIDEO_MAX_FRAME];
+#ifdef HAVE_MMNGRBUF
+  GstAtomicQueue *v4l2buf;
+  GstAtomicQueue *mmngrbuf;
+  GArray *mmngr_fd;
+  GArray *v4l2_fd;
+  GArray *mmngr_id;
+#endif
 
   /* signal handlers */
   gulong group_released_handler;
