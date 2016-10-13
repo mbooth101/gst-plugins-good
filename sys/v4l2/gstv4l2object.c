@@ -2,6 +2,7 @@
  *
  * Copyright (C) 2001-2002 Ronald Bultje <rbultje@ronald.bitfreak.net>
  *               2006 Edgard Lima <edgard.lima@indt.org.br>
+ * Copyright (C) 2016, Renesas Electronics Corporation
  *
  * gstv4l2object.c: base class for V4L2 elements
  *
@@ -43,6 +44,7 @@
 #include "gst/gst-i18n-plugin.h"
 
 #include <gst/video/video.h>
+#include "gstv4l2src.h"
 
 GST_DEBUG_CATEGORY_EXTERN (v4l2_debug);
 #define GST_CAT_DEFAULT v4l2_debug
@@ -738,6 +740,15 @@ gst_v4l2_get_driver_min_buffers (GstV4l2Object * v4l2object)
     v4l2object->min_buffers = control.value;
   } else {
     v4l2object->min_buffers = 0;
+    if (GST_IS_V4L2SRC (v4l2object->element) == TRUE) {
+#ifdef CONT_FRAME_CAPTURE
+      /* RCarVIN driver support 2 transmission modes:
+       * Single frame capture mode: require 3 or less buffers
+       * Continuous frame capture mode: require 4 or more buffers
+       */
+      v4l2object->min_buffers = 4;
+#endif
+    }
   }
 }
 
