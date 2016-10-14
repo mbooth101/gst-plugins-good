@@ -1435,7 +1435,7 @@ gst_v4l2_buffer_pool_acquire_buffer (GstBufferPool * bpool, GstBuffer ** buffer,
               && (obj->mode == GST_V4L2_IO_DMABUF) &&
               (GST_VIDEO_INFO_FORMAT (&obj->info) == GST_VIDEO_FORMAT_NV12 ||
                   GST_VIDEO_INFO_FORMAT (&obj->info) ==
-                  GST_VIDEO_FORMAT_NV16)) {
+                  GST_VIDEO_FORMAT_NV16) && GST_IS_BUFFER (*buffer)) {
             GstBuffer *mmngrbuf = NULL;
             GstBuffer *v4l2buf;
             GstMemory *v4l2mem;
@@ -1570,7 +1570,7 @@ gst_v4l2_buffer_pool_release_buffer (GstBufferPool * bpool, GstBuffer * buffer)
               && (obj->mode == GST_V4L2_IO_DMABUF) &&
               (GST_VIDEO_INFO_FORMAT (&obj->info) == GST_VIDEO_FORMAT_NV12 ||
                   GST_VIDEO_INFO_FORMAT (&obj->info) ==
-                  GST_VIDEO_FORMAT_NV16)) {
+                  GST_VIDEO_FORMAT_NV16) && GST_IS_BUFFER (buffer)) {
             GstBuffer *mmngrbuf;
             GstBuffer *v4l2buf = NULL;
             GstMemory *mmngrmem;
