@@ -2009,9 +2009,18 @@ gst_v4l2_buffer_pool_process (GstV4l2BufferPool * pool, GstBuffer ** buf)
             /* If we have no more buffer, and can allocate it time to do so */
             if (num_queued == 0) {
               if (GST_V4L2_ALLOCATOR_CAN_ALLOCATE (pool->vallocator, MMAP)) {
-                ret = gst_v4l2_buffer_pool_resurect_buffer (pool);
-                if (ret == GST_FLOW_OK)
+                if (GST_IS_V4L2SRC (pool->obj->element) &&
+                    GST_V4L2SRC (pool->obj->element)->no_resurect_buf == TRUE) {
+                  GST_V4L2SRC (pool->obj->element)->skipped_buffer++;
+                  GST_WARNING_OBJECT (pool,
+                      "Used up buffer in queued, skipped resurrect %d buffers",
+                      GST_V4L2SRC (pool->obj->element)->skipped_buffer);
                   goto done;
+                } else {
+                  ret = gst_v4l2_buffer_pool_resurect_buffer (pool);
+                  if (ret == GST_FLOW_OK)
+                    goto done;
+                }
               }
             }
 
@@ -2020,9 +2029,18 @@ gst_v4l2_buffer_pool_process (GstV4l2BufferPool * pool, GstBuffer ** buf)
               GstBuffer *copy;
 
               if (GST_V4L2_ALLOCATOR_CAN_ALLOCATE (pool->vallocator, MMAP)) {
-                ret = gst_v4l2_buffer_pool_resurect_buffer (pool);
-                if (ret == GST_FLOW_OK)
+                if (GST_IS_V4L2SRC (pool->obj->element) &&
+                    GST_V4L2SRC (pool->obj->element)->no_resurect_buf == TRUE) {
+                  GST_V4L2SRC (pool->obj->element)->skipped_buffer++;
+                  GST_WARNING_OBJECT (pool,
+                      "Reached threshold, skipped resurrect %d buffers",
+                      GST_V4L2SRC (pool->obj->element)->skipped_buffer);
                   goto done;
+                } else {
+                  ret = gst_v4l2_buffer_pool_resurect_buffer (pool);
+                  if (ret == GST_FLOW_OK)
+                    goto done;
+                }
               }
 
               /* copy the buffer */
