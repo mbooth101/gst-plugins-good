@@ -3764,6 +3764,7 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
   gboolean can_share_own_pool, pushing_from_our_pool = FALSE;
   GstAllocator *allocator = NULL;
   GstAllocationParams params = { 0 };
+  gboolean not_change_downstream_pool = FALSE;
 
   GST_DEBUG_OBJECT (obj->element, "decide allocation");
 
@@ -3783,6 +3784,14 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
   if (gst_query_get_n_allocation_pools (query) > 0) {
     gst_query_parse_nth_allocation_pool (query, 0, &pool, &size, &min, &max);
     update = TRUE;
+    config = gst_buffer_pool_get_config (pool);
+    if (gst_buffer_pool_config_has_option (config, "not_change_num_buf")) {
+      /* Down stream do not allow to change its pool and do not send out of its max num buffer */
+      GST_DEBUG_OBJECT (obj->element,
+          "Received not_change_num_buffer option from downstream");
+      not_change_downstream_pool = TRUE;
+    }
+    gst_structure_free (config);
   } else {
     pool = NULL;
     min = max = 0;
@@ -3886,6 +3895,10 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
       gst_v4l2_buffer_pool_copy_at_threshold (GST_V4L2_BUFFER_POOL (pool),
           TRUE);
     } else {
+      if (not_change_downstream_pool == TRUE) {
+        if ((own_min > max) && (max > obj->min_buffers + 1))
+          own_min = max;
+      }
       gst_v4l2_buffer_pool_copy_at_threshold (GST_V4L2_BUFFER_POOL (pool),
           FALSE);
     }
@@ -3903,12 +3916,8 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
 
     /* To import we need the other pool to hold at least own_min */
     if (obj->pool == pool) {
-      if (GST_IS_V4L2SRC (obj->element) == TRUE &&
-          obj->mode == GST_V4L2_IO_USERPTR)
-        /* In capture case and userptr mode, number of buffer belong to
-         * downstream (got through querry downstream pool)
-         */
-        min = own_min;
+      if (not_change_downstream_pool == TRUE)
+        own_min = min;
       else
         min += own_min;
     }
