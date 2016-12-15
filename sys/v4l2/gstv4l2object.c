@@ -783,15 +783,6 @@ gst_v4l2_get_driver_min_buffers (GstV4l2Object * v4l2object)
     v4l2object->min_buffers = control.value;
   } else {
     v4l2object->min_buffers = 0;
-    if (GST_IS_V4L2SRC (v4l2object->element) == TRUE) {
-#ifdef CONT_FRAME_CAPTURE
-      /* RCarVIN driver support 2 transmission modes:
-       * Single frame capture mode: require 3 or less buffers
-       * Continuous frame capture mode: require 4 or more buffers
-       */
-      v4l2object->min_buffers = 4;
-#endif
-    }
   }
 }
 
@@ -3921,6 +3912,16 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
       else
         min += own_min;
     }
+  }
+  if (GST_IS_V4L2SRC (obj->element) == TRUE) {
+#ifdef CONT_FRAME_CAPTURE
+    /* RCarVIN driver support 2 transmission modes:
+     * Single frame capture mode: require 3 or less buffers
+     * Continuous frame capture mode: require 4 or more buffers
+     */
+    if (own_min < 5)
+      own_min = 5;              /* 4 buf required from driver + 1 for handling  */
+#endif
   }
 
   /* Request a bigger max, if one was suggested but it's too small */
