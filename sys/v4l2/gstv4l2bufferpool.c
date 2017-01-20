@@ -3,7 +3,7 @@
  * Copyright (C) 2001-2002 Ronald Bultje <rbultje@ronald.bitfreak.net>
  *               2006 Edgard Lima <edgard.lima@indt.org.br>
  *               2009 Texas Instruments, Inc - http://www.ti.com/
- * Copyright (C) 2016, Renesas Electronics Corporation
+ * Copyright (C) 2016-2017, Renesas Electronics Corporation
  *
  * gstv4l2bufferpool.c V4L2 buffer pool class
  *
@@ -1500,6 +1500,10 @@ gst_v4l2_buffer_pool_acquire_buffer (GstBufferPool * bpool, GstBuffer ** buffer,
                       metav4l2->format, metav4l2->width, metav4l2->height,
                       metav4l2->n_planes, metav4l2->offset, metav4l2->stride);
                 }
+                GST_BUFFER_TIMESTAMP (*buffer) = GST_BUFFER_TIMESTAMP (v4l2buf);
+                GST_BUFFER_OFFSET (*buffer) = GST_BUFFER_OFFSET (v4l2buf);
+                GST_BUFFER_OFFSET_END (*buffer) =
+                    GST_BUFFER_OFFSET_END (v4l2buf);
                 /* Backup v4l2buffer for queue buf */
                 gst_atomic_queue_push (pool->v4l2buf, v4l2buf);
               } else {
