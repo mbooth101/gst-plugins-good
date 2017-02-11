@@ -2,7 +2,7 @@
  *
  * Copyright (C) 2001-2002 Ronald Bultje <rbultje@ronald.bitfreak.net>
  *               2006 Edgard Lima <edgard.lima@indt.org.br>
- * Copyright (C) 2016, Renesas Electronics Corporation
+ * Copyright (C) 2016-2017, Renesas Electronics Corporation
  *
  * gstv4l2object.c: base class for V4L2 elements
  *
@@ -811,6 +811,12 @@ gst_v4l2_set_defaults (GstV4l2Object * v4l2object)
       v4l2object->tv_norm =
           gst_v4l2_tuner_get_std_id_by_norm (v4l2object, norm);
       gst_tuner_norm_changed (tuner, norm);
+    }
+    if (GST_IS_V4L2SRC (v4l2object->element) == TRUE) {
+#ifdef IGNORE_FPS_STANDARD
+      /* Keep v4l2object->tv_norm = 0 eventhough can get norm value from driver */
+      v4l2object->tv_norm = 0;
+#endif
     }
   }
 
@@ -2991,6 +2997,10 @@ gst_v4l2_object_set_format_full (GstV4l2Object * v4l2object, GstCaps * caps,
   GstVideoInfo info;
   GstVideoAlignment align;
   gint width, height, fps_n, fps_d;
+#ifdef IGNORE_FPS_STANDARD
+  gint tmpfps_n = 0;
+  gint tmpfps_d = 0;
+#endif
   gint n_v4l_planes;
   gint i = 0;
   gboolean is_mplane;
@@ -3016,6 +3026,13 @@ gst_v4l2_object_set_format_full (GstV4l2Object * v4l2object, GstCaps * caps,
   height = GST_VIDEO_INFO_HEIGHT (&info);
   fps_n = GST_VIDEO_INFO_FPS_N (&info);
   fps_d = GST_VIDEO_INFO_FPS_D (&info);
+
+  if (GST_IS_V4L2SRC (v4l2object->element) == TRUE) {
+#ifdef IGNORE_FPS_STANDARD
+    tmpfps_n = fps_n;
+    tmpfps_d = fps_d;
+#endif
+  }
 
   /* if encoded format (GST_VIDEO_INFO_N_PLANES return 0)
    * or if contiguous is prefered */
@@ -3369,6 +3386,12 @@ gst_v4l2_object_set_format_full (GstV4l2Object * v4l2object, GstCaps * caps,
   }
 
 done:
+  if (GST_IS_V4L2SRC (v4l2object->element) == TRUE) {
+#ifdef IGNORE_FPS_STANDARD
+    GST_VIDEO_INFO_FPS_N (&info) = tmpfps_n;
+    GST_VIDEO_INFO_FPS_D (&info) = tmpfps_d;
+#endif
+  }
   /* add boolean return, so we can fail on drivers bugs */
   gst_v4l2_object_save_format (v4l2object, fmtdesc, &format, &info, &align);
 
