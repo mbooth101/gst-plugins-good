@@ -297,7 +297,8 @@ gst_v4l2_buffer_pool_import_userptr (GstV4l2BufferPool * pool,
 
   /* Do not care GST_V4L2_IMPORT_QUARK in caputure case (v4l2src) */
   if (GST_IS_V4L2SRC (pool->obj->element) == TRUE) {
-    gst_buffer_unmap (src, &data->map);
+    data->buffer = gst_buffer_ref (src);
+    _unmap_userptr_frame (data);
   } else {
     data->buffer = gst_buffer_ref (src);
 
