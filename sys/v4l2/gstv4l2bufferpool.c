@@ -1418,8 +1418,14 @@ gst_v4l2_buffer_pool_acquire_buffer (GstBufferPool * bpool, GstBuffer ** buffer,
 
   /* If this is being called to resurect a lost buffer */
   if (params && params->flags & GST_V4L2_BUFFER_POOL_ACQUIRE_FLAG_RESURRECT) {
-    ret = pclass->acquire_buffer (bpool, buffer, params);
-    goto done;
+    if (GST_IS_V4L2SRC (obj->element) &&
+        GST_V4L2SRC (obj->element)->no_resurect_buf == TRUE) {
+      GST_WARNING_OBJECT (pool,
+          "Lost one buffer but skipped resurrect for this buffer");
+    } else {
+      ret = pclass->acquire_buffer (bpool, buffer, params);
+      goto done;
+    }
   }
 
   switch (obj->type) {
