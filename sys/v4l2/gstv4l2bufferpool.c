@@ -47,6 +47,10 @@
 #include "gst/gst-i18n-plugin.h"
 #include <gst/glib-compat-private.h>
 #include "gstv4l2src.h"
+#ifdef HAVE_MMNGRBUF
+#include "mmngr_buf_user_public.h"
+#endif
+#include <unistd.h>             /* getpagesize() */
 
 GST_DEBUG_CATEGORY_STATIC (v4l2bufferpool_debug);
 GST_DEBUG_CATEGORY_STATIC (CAT_PERFORMANCE);
@@ -472,6 +476,97 @@ gst_v4l2_buffer_pool_alloc_buffer (GstBufferPool * bpool, GstBuffer ** buffer,
       g_assert_not_reached ();
       break;
   }
+
+#ifdef HAVE_MMNGRBUF
+  /* Workaround for supporting NV12/NV16 multiplane incase V4L2_BUF_TYPE_VIDEO_CAPTURE */
+  if (group != NULL) {
+    if ((obj->type == V4L2_BUF_TYPE_VIDEO_CAPTURE)
+        && (obj->mode == GST_V4L2_IO_DMABUF) &&
+        (GST_VIDEO_INFO_N_PLANES (info) > group->n_mem)) {
+      GstMemory *wa_mem[GST_VIDEO_MAX_PLANES];
+      gint plane_size[GST_VIDEO_MAX_PLANES];
+      gint plane_size_ext[GST_VIDEO_MAX_PLANES];
+      gint page_offset[GST_VIDEO_MAX_PLANES];
+      gint offset[GST_VIDEO_MAX_PLANES] = { 0, };
+      gint exportfd[GST_VIDEO_MAX_PLANES];
+      gint exportid[GST_VIDEO_MAX_PLANES];
+      gint v4l2fd;
+      gint ret;
+      guint phys_addr;
+      gint importid;
+      gsize v4l2memsize;
+      gint i;
+      gint page_size;
+      GstBuffer *mmngrbuf;
+
+      v4l2fd = gst_dmabuf_memory_get_fd (group->mem[0]);        /* V4L2_BUF_TYPE_VIDEO_CAPTURE always have 1 mem */
+
+      /* Record v4l2fd */
+      g_array_append_val (pool->v4l2_fd, v4l2fd);
+
+      /* Got top of Y plane's address from v4l2fd */
+      ret =
+          mmngr_import_start_in_user_ext (&importid, &v4l2memsize,
+          &phys_addr, v4l2fd, NULL);
+      if (ret != R_MM_OK) {
+        GST_ERROR_OBJECT (pool, "Fail to import v4l2 dmabuf fd");
+        return GST_FLOW_ERROR;
+      }
+      GST_DEBUG_OBJECT (pool,
+          "Got top of Y plane's address 0x%08x from v4l2 dmabuf fd %d",
+          phys_addr, v4l2fd);
+      /* Create a workaround buffer that contain 2 mem represent for 2
+       * dmabuf fd of Y plane and UV plane with sizes are aligned for
+       * page size*/
+      switch (GST_VIDEO_INFO_FORMAT (info)) {
+        case GST_VIDEO_FORMAT_NV12:
+          plane_size[0] = obj->format.fmt.pix.bytesperline *
+              obj->format.fmt.pix.height;
+          plane_size[1] = plane_size[0] / 2;
+          offset[1] = offset[0] + plane_size[0];
+          break;
+        case GST_VIDEO_FORMAT_NV16:
+          plane_size[0] = plane_size[1] =
+              obj->format.fmt.pix.bytesperline * obj->format.fmt.pix.height;
+          offset[1] = offset[0] + plane_size[0];
+          break;
+        default:
+          GST_DEBUG_OBJECT (pool, "Not handle now");
+          break;
+      }
+      page_size = getpagesize ();
+      mmngrbuf = gst_buffer_new ();
+      for (i = 0; i < GST_VIDEO_INFO_N_PLANES (info); i++) {
+        phys_addr = phys_addr + offset[i];
+        page_offset[i] = phys_addr & (page_size - 1);
+        plane_size_ext[i] = GST_ROUND_UP_N (plane_size[i] + page_offset[i],
+            page_size);
+        ret =
+            mmngr_export_start_in_user_ext (&exportid[i],
+            (gsize) plane_size_ext[i], phys_addr, &exportfd[i], NULL);
+        if (ret != R_MM_OK) {
+          GST_ERROR_OBJECT (pool,
+              "mmngr_export_start_in_user failed (phys_addr:0x%08x)",
+              phys_addr);
+          return GST_FLOW_ERROR;
+        }
+        /* Record mmngrfd and mmngrid */
+        g_array_append_val (pool->mmngr_id, exportid[i]);
+        g_array_append_val (pool->mmngr_fd, exportfd[i]);
+
+        wa_mem[i] = gst_dmabuf_allocator_alloc (pool->allocator, exportfd[i],
+            plane_size_ext[i]);
+        wa_mem[i]->offset = page_offset[i];
+        wa_mem[i]->size = plane_size[i];
+
+        gst_buffer_append_memory (mmngrbuf, wa_mem[i]);
+      }
+      /* Record workaround buffer for sending to downstream */
+      gst_atomic_queue_push (pool->mmngrbuf, mmngrbuf);
+      mmngr_import_end_in_user_ext (importid);
+    }
+  }
+#endif
 
   if (group != NULL) {
     gint i;
@@ -1342,6 +1437,77 @@ gst_v4l2_buffer_pool_acquire_buffer (GstBufferPool * bpool, GstBuffer ** buffer,
            * storage for our buffers. This function does poll first so we can
            * interrupt it fine. */
           ret = gst_v4l2_buffer_pool_dqbuf (pool, buffer);
+#ifdef HAVE_MMNGRBUF
+          /* Workaround for supporting NV12/NV16 multiplane incase V4L2_BUF_TYPE_VIDEO_CAPTURE */
+          if ((obj->type == V4L2_BUF_TYPE_VIDEO_CAPTURE)
+              && (obj->mode == GST_V4L2_IO_DMABUF) &&
+              (GST_VIDEO_INFO_FORMAT (&obj->info) == GST_VIDEO_FORMAT_NV12 ||
+                  GST_VIDEO_INFO_FORMAT (&obj->info) ==
+                  GST_VIDEO_FORMAT_NV16) && GST_IS_BUFFER (*buffer)) {
+            GstBuffer *mmngrbuf = NULL;
+            GstBuffer *v4l2buf;
+            GstMemory *v4l2mem;
+            GstMemory *mmngrmem;
+            GstVideoMeta *metav4l2;
+            GstVideoMeta *metammngr;
+            gint v4l2fd;
+            gint mmngrfd = 0;
+            gint i;
+
+            /* Replace v4l2 buffer by workaround buffer to send multi-plane for donwstream */
+            v4l2mem = gst_buffer_peek_memory (*buffer, 0);      /* V4L2_BUF_TYPE_VIDEO_CAPTURE only 1 mem */
+            if (gst_is_dmabuf_memory (v4l2mem)) {
+              v4l2fd = gst_dmabuf_memory_get_fd (v4l2mem);
+              for (i = 0; i < pool->v4l2_fd->len; i++) {
+                if (v4l2fd == g_array_index (pool->v4l2_fd, gint, i)) {
+                  /* Got corresponding mmngrfd */
+                  mmngrfd = g_array_index (pool->mmngr_fd, gint, (2 * i));
+                  GST_DEBUG_OBJECT (pool,
+                      "Got mmngrfd %d corresponding with v4l2fd %d",
+                      mmngrfd, v4l2fd);
+                  break;
+                }
+              }
+              if (mmngrfd == 0) {
+                GST_ERROR_OBJECT (pool, "Can not get corresponding mmngrfd");
+                return GST_FLOW_ERROR;
+              }
+              while (gst_atomic_queue_length (pool->mmngrbuf) > 0) {
+                mmngrbuf = gst_atomic_queue_pop (pool->mmngrbuf);
+                if (mmngrbuf) {
+                  mmngrmem = gst_buffer_peek_memory (mmngrbuf, 0);
+                  if (mmngrmem
+                      && (gst_dmabuf_memory_get_fd (mmngrmem) == mmngrfd))
+                    break;
+                  else
+                    gst_atomic_queue_push (pool->mmngrbuf, mmngrbuf);
+                }
+              }
+              if (mmngrbuf) {
+                v4l2buf = *buffer;
+                *buffer = mmngrbuf;
+                metav4l2 = gst_buffer_get_video_meta (v4l2buf);
+                metammngr = gst_buffer_get_video_meta (*buffer);
+                if (!metammngr && metav4l2) {
+                  /* mmngrbuf must have metadata for downstreams need to map frame */
+                  GST_DEBUG_OBJECT (pool, " Add metadata for mmngrbuf");
+                  gst_buffer_add_video_meta_full (*buffer, metav4l2->flags,
+                      metav4l2->format, metav4l2->width, metav4l2->height,
+                      metav4l2->n_planes, metav4l2->offset, metav4l2->stride);
+                }
+                GST_BUFFER_TIMESTAMP (*buffer) = GST_BUFFER_TIMESTAMP (v4l2buf);
+                GST_BUFFER_OFFSET (*buffer) = GST_BUFFER_OFFSET (v4l2buf);
+                GST_BUFFER_OFFSET_END (*buffer) =
+                    GST_BUFFER_OFFSET_END (v4l2buf);
+                /* Backup v4l2buffer for queue buf */
+                gst_atomic_queue_push (pool->v4l2buf, v4l2buf);
+              } else {
+                GST_ERROR_OBJECT (pool, "Can not get workaround buffer");
+                return GST_FLOW_ERROR;
+              }
+            }
+          }
+#endif
           break;
         }
         default:
@@ -1411,6 +1577,62 @@ gst_v4l2_buffer_pool_release_buffer (GstBufferPool * bpool, GstBuffer * buffer)
         case GST_V4L2_IO_DMABUF_IMPORT:
         {
           GstV4l2MemoryGroup *group;
+#ifdef HAVE_MMNGRBUF
+          if ((obj->type == V4L2_BUF_TYPE_VIDEO_CAPTURE)
+              && (obj->mode == GST_V4L2_IO_DMABUF) &&
+              (GST_VIDEO_INFO_FORMAT (&obj->info) == GST_VIDEO_FORMAT_NV12 ||
+                  GST_VIDEO_INFO_FORMAT (&obj->info) ==
+                  GST_VIDEO_FORMAT_NV16) && GST_IS_BUFFER (buffer)) {
+            GstBuffer *mmngrbuf;
+            GstBuffer *v4l2buf = NULL;
+            GstMemory *mmngrmem;
+            GstMemory *v4l2mem;
+            gint n_mem;
+            gint i;
+            gint mmngrfd;
+            gint v4l2fd = 0;
+
+            n_mem = gst_buffer_n_memory (buffer);
+            if (n_mem > 1) {
+              /* Give buffer back to v4l2 buffer before queue buf */
+              mmngrmem = gst_buffer_peek_memory (buffer, 0);
+              if (mmngrmem && gst_is_dmabuf_memory (mmngrmem)) {
+                mmngrfd = gst_dmabuf_memory_get_fd (mmngrmem);
+                for (i = 0; i < pool->mmngr_fd->len; i++) {
+                  if (mmngrfd == g_array_index (pool->mmngr_fd, gint, i)) {
+                    /* Got corresponding v4l2fd */
+                    v4l2fd = g_array_index (pool->v4l2_fd, gint, (i / 2));
+                  }
+                }
+                if (v4l2fd == 0) {
+                  GST_ERROR_OBJECT (pool, "Can not get corresponding mmngrmem");
+                  break;
+                }
+
+                while (gst_atomic_queue_length (pool->v4l2buf) > 0) {
+                  v4l2buf = gst_atomic_queue_pop (pool->v4l2buf);
+                  if (v4l2buf) {
+                    v4l2mem = gst_buffer_peek_memory (v4l2buf, 0);
+                    if (v4l2mem
+                        && (gst_dmabuf_memory_get_fd (v4l2mem) == v4l2fd))
+                      break;
+                    else
+                      gst_atomic_queue_push (pool->v4l2buf, v4l2buf);
+                  }
+                }
+                if (v4l2buf) {
+                  mmngrbuf = buffer;
+                  buffer = v4l2buf;
+                  gst_atomic_queue_push (pool->mmngrbuf, mmngrbuf);
+                } else {
+                  GST_ERROR_OBJECT (pool,
+                      "Can not get corresponding v4l2buffer");
+                  break;
+                }
+              }
+            }
+          }
+#endif
           if (gst_v4l2_is_buffer_valid (buffer, &group)) {
             gst_v4l2_allocator_reset_group (pool->vallocator, group);
             /* queue back in the device */
@@ -1530,6 +1752,42 @@ gst_v4l2_buffer_pool_finalize (GObject * object)
   g_cond_clear (&pool->empty_cond);
 
   /* FIXME have we done enough here ? */
+#ifdef HAVE_MMNGRBUF
+  if (pool->mmngr_id->len > 0) {
+    gint i;
+    for (i = 0; i < pool->mmngr_id->len; i++)
+      mmngr_export_end_in_user_ext (g_array_index (pool->mmngr_id, gint, i));
+  }
+  if (gst_atomic_queue_length (pool->v4l2buf) > 0) {
+    GstBuffer *v4l2buf;
+    gint num_buf;
+    gint i;
+
+    num_buf = gst_atomic_queue_length (pool->v4l2buf);
+    for (i = 0; i < num_buf; i++) {
+      v4l2buf = gst_atomic_queue_pop (pool->v4l2buf);
+      gst_buffer_unref (v4l2buf);
+    }
+  }
+
+  if (gst_atomic_queue_length (pool->mmngrbuf) > 0) {
+    GstBuffer *mmngrbuf;
+    gint num_buf;
+    gint i;
+
+    num_buf = gst_atomic_queue_length (pool->mmngrbuf);
+    for (i = 0; i < num_buf; i++) {
+      mmngrbuf = gst_atomic_queue_pop (pool->mmngrbuf);
+      gst_buffer_unref (mmngrbuf);
+    }
+  }
+
+  gst_atomic_queue_unref (pool->v4l2buf);
+  gst_atomic_queue_unref (pool->mmngrbuf);
+  g_array_free (pool->mmngr_fd, TRUE);
+  g_array_free (pool->v4l2_fd, TRUE);
+  g_array_free (pool->mmngr_id, TRUE);
+#endif
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -1541,6 +1799,13 @@ gst_v4l2_buffer_pool_init (GstV4l2BufferPool * pool)
   pool->can_poll_device = TRUE;
   g_cond_init (&pool->empty_cond);
   pool->empty = TRUE;
+#ifdef HAVE_MMNGRBUF
+  pool->v4l2buf = gst_atomic_queue_new (16);
+  pool->mmngrbuf = gst_atomic_queue_new (16);
+  pool->mmngr_fd = g_array_new (FALSE, FALSE, sizeof (gint));
+  pool->v4l2_fd = g_array_new (FALSE, FALSE, sizeof (gint));
+  pool->mmngr_id = g_array_new (FALSE, FALSE, sizeof (gint));
+#endif
 }
 
 static void
