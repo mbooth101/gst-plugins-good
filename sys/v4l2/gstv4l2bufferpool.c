@@ -1001,9 +1001,22 @@ gst_v4l2_buffer_pool_stop (GstBufferPool * bpool)
   }
 
   if (pool->other_pool) {
-    gst_buffer_pool_set_active (pool->other_pool, FALSE);
-    gst_object_unref (pool->other_pool);
-    pool->other_pool = NULL;
+    if (GST_IS_V4L2SRC (pool->obj->element)) {
+      if (pool->obj->mode != GST_V4L2_IO_USERPTR) {
+        /* In case userptr mode, other pool will be deactivate and unref in
+         * finalize to avoid basesrc deactivate and can not activate for
+         * other_pool again */
+        if (pool->other_pool) {
+          gst_buffer_pool_set_active (pool->other_pool, FALSE);
+          gst_object_unref (pool->other_pool);
+          pool->other_pool = NULL;
+        }
+      }
+    } else {
+      gst_buffer_pool_set_active (pool->other_pool, FALSE);
+      gst_object_unref (pool->other_pool);
+      pool->other_pool = NULL;
+    }
   }
 
   gst_v4l2_buffer_pool_streamoff (pool);
@@ -1748,8 +1761,11 @@ gst_v4l2_buffer_pool_dispose (GObject * object)
     gst_object_unref (pool->allocator);
   pool->allocator = NULL;
 
-  if (pool->other_pool)
+  if (pool->other_pool) {
+    if (gst_buffer_pool_is_active (pool->other_pool))
+      gst_buffer_pool_set_active (pool->other_pool, FALSE);
     gst_object_unref (pool->other_pool);
+  }
   pool->other_pool = NULL;
 
   G_OBJECT_CLASS (parent_class)->dispose (object);
