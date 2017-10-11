@@ -4000,6 +4000,7 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
   gboolean can_share_own_pool, pushing_from_our_pool = FALSE;
   GstAllocator *allocator = NULL;
   GstAllocationParams params = { 0 };
+  gboolean not_change_downstream_pool = FALSE;
 
   GST_DEBUG_OBJECT (obj->element, "decide allocation");
 
@@ -4019,6 +4020,14 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
   if (gst_query_get_n_allocation_pools (query) > 0) {
     gst_query_parse_nth_allocation_pool (query, 0, &pool, &size, &min, &max);
     update = TRUE;
+    config = gst_buffer_pool_get_config (pool);
+    if (gst_buffer_pool_config_has_option (config, "not_change_pool")) {
+      /* Down stream do not allow to change its pool and do not send out of its max num buffer */
+      GST_DEBUG_OBJECT (obj->element,
+          "Received not_change_pool option from downstream");
+      not_change_downstream_pool = TRUE;
+    }
+    gst_structure_free (config);
   } else {
     pool = NULL;
     min = max = 0;
@@ -4122,6 +4131,11 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
       gst_v4l2_buffer_pool_copy_at_threshold (GST_V4L2_BUFFER_POOL (pool),
           TRUE);
     } else {
+      if (not_change_downstream_pool == TRUE)
+        /* Down stream only want to recive number of buffer that it proposes (omxh264enc)
+         * set min as downstream's proposal */
+        own_min = min;
+
       gst_v4l2_buffer_pool_copy_at_threshold (GST_V4L2_BUFFER_POOL (pool),
           FALSE);
     }
@@ -4138,8 +4152,14 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
     min = MAX (min, GST_V4L2_MIN_BUFFERS);
 
     /* To import we need the other pool to hold at least own_min */
-    if (obj->pool == pool)
-      min += own_min;
+    if (obj->pool == pool) {
+      if (not_change_downstream_pool == TRUE)
+        /* Down stream only want to recive number of buffer that it proposes (omxh264enc)
+         * set min as downstream's proposal */
+        own_min = min;
+      else
+        min += own_min;
+    }
   }
 
   if (GST_IS_V4L2SRC (obj->element) == TRUE) {
@@ -4148,8 +4168,13 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
      * Single frame capture mode: require 3 or less buffers
      * Continuous frame capture mode: require 4 or more buffers
      */
-    if (own_min < 5)
-      own_min = 5;              /* 4 buf required from driver + 1 for handling  */
+    if (own_min < 5) {
+      if (!not_change_downstream_pool)
+        own_min = 5;            /* 4 buf required from driver + 1 for handling  */
+      else
+        GST_DEBUG_OBJECT (obj->element,
+            "May capturing under single frame mode due to propose lesser buffer");
+    }
 #endif
   }
 
