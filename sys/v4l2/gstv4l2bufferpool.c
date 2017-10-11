@@ -3,6 +3,7 @@
  * Copyright (C) 2001-2002 Ronald Bultje <rbultje@ronald.bitfreak.net>
  *               2006 Edgard Lima <edgard.lima@gmail.com>
  *               2009 Texas Instruments, Inc - http://www.ti.com/
+ * Copyright (C) 2017, Renesas Electronics Corporation
  *
  * gstv4l2bufferpool.c V4L2 buffer pool class
  *
@@ -45,6 +46,7 @@
 #include "v4l2_calls.h"
 #include "gst/gst-i18n-plugin.h"
 #include <gst/glib-compat-private.h>
+#include "gstv4l2src.h"
 
 GST_DEBUG_CATEGORY_STATIC (v4l2bufferpool_debug);
 GST_DEBUG_CATEGORY_STATIC (CAT_PERFORMANCE);
@@ -205,6 +207,7 @@ gst_v4l2_buffer_pool_import_userptr (GstV4l2BufferPool * pool,
   GstMapFlags flags;
   const GstVideoFormatInfo *finfo = pool->caps_info.finfo;
   struct UserPtrData *data = NULL;
+  gboolean not_change_downstream_pool = FALSE;
 
   GST_LOG_OBJECT (pool, "importing userptr");
 
@@ -220,7 +223,8 @@ gst_v4l2_buffer_pool_import_userptr (GstV4l2BufferPool * pool,
   data = g_slice_new0 (struct UserPtrData);
 
   if (finfo && (finfo->format != GST_VIDEO_FORMAT_UNKNOWN &&
-          finfo->format != GST_VIDEO_FORMAT_ENCODED)) {
+          finfo->format != GST_VIDEO_FORMAT_ENCODED) &&
+      (group->n_mem == finfo->n_planes)) {
     gsize size[GST_VIDEO_MAX_PLANES] = { 0, };
     gint i;
 
@@ -287,10 +291,27 @@ gst_v4l2_buffer_pool_import_userptr (GstV4l2BufferPool * pool,
       goto import_failed;
   }
 
-  data->buffer = gst_buffer_ref (src);
+  if (pool->other_pool) {
+    GstStructure *config;
+    config = gst_buffer_pool_get_config (pool->other_pool);
+    if (gst_buffer_pool_config_has_option (config, "not_change_pool")) {
+      /* Handle for downstream is omx encoder */
+      GST_DEBUG_OBJECT (pool,
+          "Downstream request not to change its buffers in pool");
+      not_change_downstream_pool = TRUE;
+    }
+    gst_structure_free (config);
+  }
 
-  gst_mini_object_set_qdata (GST_MINI_OBJECT (dest), GST_V4L2_IMPORT_QUARK,
-      data, (GDestroyNotify) _unmap_userptr_frame);
+  if (GST_IS_V4L2SRC (pool->obj->element) && not_change_downstream_pool) {
+    data->buffer = gst_buffer_ref (src);
+    _unmap_userptr_frame (data);
+  } else {
+    data->buffer = gst_buffer_ref (src);
+
+    gst_mini_object_set_qdata (GST_MINI_OBJECT (dest), GST_V4L2_IMPORT_QUARK,
+        data, (GDestroyNotify) _unmap_userptr_frame);
+  }
 
   gst_buffer_copy_into (dest, src,
       GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
@@ -1820,11 +1841,19 @@ gst_v4l2_buffer_pool_process (GstV4l2BufferPool * pool, GstBuffer ** buf)
         {
           struct UserPtrData *data;
 
-          /* Replace our buffer with downstream allocated buffer */
+          /* Replace our buffer with downstream allocated buffer for
+           * element which is not v4l2src.
+           * In v4l2src case, v4l2buffer already contain userptr of
+           * downstream and use it to fill data so don't replace any buffer */
           data = gst_mini_object_steal_qdata (GST_MINI_OBJECT (*buf),
               GST_V4L2_IMPORT_QUARK);
-          gst_buffer_replace (buf, data->buffer);
-          _unmap_userptr_frame (data);
+
+          if (data) {
+            if (!GST_IS_V4L2SRC (pool->obj->element))
+              gst_buffer_replace (buf, data->buffer);
+
+            _unmap_userptr_frame (data);
+          }
           break;
         }
 
