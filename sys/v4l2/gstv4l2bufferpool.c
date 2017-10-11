@@ -1428,8 +1428,14 @@ gst_v4l2_buffer_pool_acquire_buffer (GstBufferPool * bpool, GstBuffer ** buffer,
 
   /* If this is being called to resurect a lost buffer */
   if (params && params->flags & GST_V4L2_BUFFER_POOL_ACQUIRE_FLAG_RESURRECT) {
-    ret = pclass->acquire_buffer (bpool, buffer, params);
-    goto done;
+    if (GST_IS_V4L2SRC (obj->element) &&
+        GST_V4L2SRC (obj->element)->no_resurect_buf == TRUE) {
+      GST_WARNING_OBJECT (pool,
+          "Lost one buffer but skipped resurrect for this buffer");
+    } else {
+      ret = pclass->acquire_buffer (bpool, buffer, params);
+      goto done;
+    }
   }
 
   switch (obj->type) {
@@ -2044,9 +2050,18 @@ gst_v4l2_buffer_pool_process (GstV4l2BufferPool * pool, GstBuffer ** buf)
             /* If we have no more buffer, and can allocate it time to do so */
             if (num_queued == 0) {
               if (GST_V4L2_ALLOCATOR_CAN_ALLOCATE (pool->vallocator, MMAP)) {
-                ret = gst_v4l2_buffer_pool_resurect_buffer (pool);
-                if (ret == GST_FLOW_OK)
+                if (GST_IS_V4L2SRC (pool->obj->element) &&
+                    GST_V4L2SRC (pool->obj->element)->no_resurect_buf == TRUE) {
+                  GST_V4L2SRC (pool->obj->element)->skipped_buffer++;
+                  GST_WARNING_OBJECT (pool,
+                      "Used up buffer in queued, skipped resurrect %d buffers",
+                      GST_V4L2SRC (pool->obj->element)->skipped_buffer);
                   goto done;
+                } else {
+                  ret = gst_v4l2_buffer_pool_resurect_buffer (pool);
+                  if (ret == GST_FLOW_OK)
+                    goto done;
+                }
               }
             }
 
@@ -2055,9 +2070,18 @@ gst_v4l2_buffer_pool_process (GstV4l2BufferPool * pool, GstBuffer ** buf)
               GstBuffer *copy;
 
               if (GST_V4L2_ALLOCATOR_CAN_ALLOCATE (pool->vallocator, MMAP)) {
-                ret = gst_v4l2_buffer_pool_resurect_buffer (pool);
-                if (ret == GST_FLOW_OK)
+                if (GST_IS_V4L2SRC (pool->obj->element) &&
+                    GST_V4L2SRC (pool->obj->element)->no_resurect_buf == TRUE) {
+                  GST_V4L2SRC (pool->obj->element)->skipped_buffer++;
+                  GST_WARNING_OBJECT (pool,
+                      "Reached threshold, skipped resurrect %d buffers",
+                      GST_V4L2SRC (pool->obj->element)->skipped_buffer);
                   goto done;
+                } else {
+                  ret = gst_v4l2_buffer_pool_resurect_buffer (pool);
+                  if (ret == GST_FLOW_OK)
+                    goto done;
+                }
               }
 
               /* copy the buffer */

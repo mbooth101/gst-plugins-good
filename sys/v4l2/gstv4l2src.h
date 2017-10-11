@@ -66,6 +66,10 @@ struct _GstV4l2Src
   GstClockTime ctrl_time;
   struct v4l2_rect in_size;
   struct v4l2_rect crop;
+  /* Skip create new buffer when used up buffer in queue */
+  gboolean no_resurect_buf;
+  /* Count skipped buffers when enable no_resurect_buf */
+  guint skipped_buffer;
 
   gboolean pending_set_fmt;
 
