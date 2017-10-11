@@ -2,6 +2,7 @@
  *
  * Copyright (C) 2001-2002 Ronald Bultje <rbultje@ronald.bitfreak.net>
  *               2006 Edgard Lima <edgard.lima@gmail.com>
+ * Copyright (C) 2017, Renesas Electronics Corporation
  *
  * gstv4l2src.c: Video4Linux2 source element
  *
@@ -246,27 +247,67 @@ gst_v4l2src_get_property (GObject * object,
   }
 }
 
+static gboolean
+gst_v4l2src_get_input_size_info (GstV4l2Src * src)
+{
+  GstV4l2Object *obj;
+  struct v4l2_cropcap cropcap = { 0 };
+
+  obj = src->v4l2object;
+
+  /* Currently, get information of input resolution through cropcap callback */
+  cropcap.type = obj->type;
+  if (v4l2_ioctl (src->v4l2object->video_fd, VIDIOC_CROPCAP, &cropcap) < 0) {
+    GST_ERROR_OBJECT (src, "Cropcap fail, CROPCAP has not supported");
+    return FALSE;
+  }
+  src->in_size.top = cropcap.defrect.top;
+  src->in_size.left = cropcap.defrect.left;
+  src->in_size.width = cropcap.defrect.width;
+  src->in_size.height = cropcap.defrect.height;
+
+  return TRUE;
+}
+
+
 /* this function is a bit of a last resort */
 static GstCaps *
 gst_v4l2src_fixate (GstBaseSrc * basesrc, GstCaps * caps)
 {
   GstStructure *structure;
+  GstV4l2Src *v4l2src;
   gint i;
+  gboolean ret;
 
   GST_DEBUG_OBJECT (basesrc, "fixating caps %" GST_PTR_FORMAT, caps);
 
   caps = gst_caps_make_writable (caps);
 
+  v4l2src = GST_V4L2SRC (basesrc);
+  ret = gst_v4l2src_get_input_size_info (v4l2src);
+
   for (i = 0; i < gst_caps_get_size (caps); ++i) {
     structure = gst_caps_get_structure (caps, i);
 
     /* We are fixating to a reasonable 320x200 resolution
-       and the maximum framerate resolution for that size */
-    if (gst_structure_has_field (structure, "width"))
-      gst_structure_fixate_field_nearest_int (structure, "width", 320);
+     * or input resolution (if driver has support getting
+     * input resolution via VIDIOC_CROPCAP)
+     * and the maximum framerate resolution for that size */
+    if (gst_structure_has_field (structure, "width")) {
+      if (ret && (v4l2src->in_size.width > 0))
+        gst_structure_fixate_field_nearest_int (structure, "width",
+            v4l2src->in_size.width);
+      else
+        gst_structure_fixate_field_nearest_int (structure, "width", 320);
+    }
 
-    if (gst_structure_has_field (structure, "height"))
-      gst_structure_fixate_field_nearest_int (structure, "height", 200);
+    if (gst_structure_has_field (structure, "height")) {
+      if (ret && (v4l2src->in_size.height > 0))
+        gst_structure_fixate_field_nearest_int (structure, "height",
+            v4l2src->in_size.height);
+      else
+        gst_structure_fixate_field_nearest_int (structure, "height", 200);
+    }
 
     if (gst_structure_has_field (structure, "framerate"))
       gst_structure_fixate_field_nearest_fraction (structure, "framerate",
