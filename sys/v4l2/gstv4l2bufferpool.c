@@ -3,7 +3,7 @@
  * Copyright (C) 2001-2002 Ronald Bultje <rbultje@ronald.bitfreak.net>
  *               2006 Edgard Lima <edgard.lima@gmail.com>
  *               2009 Texas Instruments, Inc - http://www.ti.com/
- * Copyright (C) 2017, Renesas Electronics Corporation
+ * Copyright (C) 2017-2018, Renesas Electronics Corporation
  *
  * gstv4l2bufferpool.c V4L2 buffer pool class
  *
@@ -2124,16 +2124,30 @@ gst_v4l2_buffer_pool_process (GstV4l2BufferPool * pool, GstBuffer ** buf)
         {
           struct UserPtrData *data;
           GstBuffer *tmp;
+          gboolean not_change_downstream_pool = FALSE;
+          if (pool->other_pool) {
+            GstStructure *config;
+            config = gst_buffer_pool_get_config (pool->other_pool);
+            if (gst_buffer_pool_config_has_option (config, "not_change_pool")) {
+              /* Handle for downstream is omx encoder */
+              GST_DEBUG_OBJECT (pool,
+                  "Downstream request not to change its buffers in pool");
+              not_change_downstream_pool = TRUE;
+            }
+            gst_structure_free (config);
+          }
 
-          /* Replace our buffer with downstream allocated buffer for
-           * element which is not v4l2src.
-           * In v4l2src case, v4l2buffer already contain userptr of
-           * downstream and use it to fill data so don't replace any buffer */
+          /* Replace our buffer with downstream allocated buffer
+           * except downstream is omx encoder */
           data = gst_mini_object_steal_qdata (GST_MINI_OBJECT (*buf),
               GST_V4L2_IMPORT_QUARK);
 
           if (data) {
             tmp = gst_buffer_ref (data->buffer);
+
+            if (!not_change_downstream_pool)
+              gst_buffer_replace (buf, tmp);
+
             _unmap_userptr_frame (data);
 
             if (!GST_IS_V4L2SRC (pool->obj->element)) {
