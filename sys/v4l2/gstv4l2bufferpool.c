@@ -1006,18 +1006,13 @@ gst_v4l2_buffer_pool_stop (GstBufferPool * bpool)
   }
 
   if (pool->other_pool) {
-    if (GST_IS_V4L2SRC (pool->obj->element)) {
-      if (pool->obj->mode != GST_V4L2_IO_USERPTR) {
-        /* In case userptr mode, other pool will be deactivate and unref in
-         * finalize to avoid basesrc deactivate and can not activate for
-         * other_pool again */
-        if (pool->other_pool) {
-          gst_buffer_pool_set_active (pool->other_pool, FALSE);
-          gst_object_unref (pool->other_pool);
-          pool->other_pool = NULL;
-        }
-      }
-    } else {
+    /* + If object is v4l2src and mode is userptr: Do nothing
+     * to avoid basesrc deactivate other_pool and cannot re-activate other_pool
+     * deactivate and unref for other_pool will be done in dispose()
+     * + Other cases: deactivate and unref other_pool
+     */
+    if (!GST_IS_V4L2SRC (pool->obj->element) ||
+        (pool->obj->mode != GST_V4L2_IO_USERPTR)) {
       gst_buffer_pool_set_active (pool->other_pool, FALSE);
       gst_object_unref (pool->other_pool);
       pool->other_pool = NULL;
