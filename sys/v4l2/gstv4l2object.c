@@ -316,6 +316,11 @@ gst_v4l2_object_install_properties_helper (GObjectClass * gobject_class,
       g_param_spec_flags ("flags", "Flags", "Device type flags",
           GST_TYPE_V4L2_DEVICE_FLAGS, DEFAULT_PROP_FLAGS,
           G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_DISABLE_DYNAMIC_BUFFER_ALLOC,
+      g_param_spec_boolean ("disable-dynamic-buffer-alloc",
+          "Disable dynamic buffer allocation",
+          "Flag for handling dynamic buffer allocation",
+          FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
    * GstV4l2Src:brightness:
@@ -704,6 +709,9 @@ gst_v4l2_object_set_property_helper (GstV4l2Object * v4l2object,
     case PROP_FORCE_ASPECT_RATIO:
       v4l2object->keep_aspect = g_value_get_boolean (value);
       break;
+    case PROP_DISABLE_DYNAMIC_BUFFER_ALLOC:
+      v4l2object->disable_dynamic_buffer_alloc = g_value_get_boolean (value);
+      break;
     default:
       return FALSE;
       break;
@@ -800,6 +808,9 @@ gst_v4l2_object_get_property_helper (GstV4l2Object * v4l2object,
       break;
     case PROP_FORCE_ASPECT_RATIO:
       g_value_set_boolean (value, v4l2object->keep_aspect);
+      break;
+    case PROP_DISABLE_DYNAMIC_BUFFER_ALLOC:
+      g_value_set_boolean (value, v4l2object->disable_dynamic_buffer_alloc);
       break;
     default:
       return FALSE;
