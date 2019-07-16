@@ -53,6 +53,7 @@ GST_DEBUG_CATEGORY_EXTERN (v4l2_debug);
 #define DEFAULT_PROP_FLAGS              0
 #define DEFAULT_PROP_TV_NORM            0
 #define DEFAULT_PROP_IO_MODE            GST_V4L2_IO_AUTO
+#define DEFAULT_PROP_DISABLE_DYNAMIC_BUFFER_ALLOC    FALSE
 
 #define ENCODED_BUFFER_SIZE             (2 * 1024 * 1024)
 
@@ -320,7 +321,8 @@ gst_v4l2_object_install_properties_helper (GObjectClass * gobject_class,
       g_param_spec_boolean ("disable-dynamic-buffer-alloc",
           "Disable dynamic buffer allocation",
           "Flag for handling dynamic buffer allocation",
-          FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          DEFAULT_PROP_DISABLE_DYNAMIC_BUFFER_ALLOC,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
    * GstV4l2Src:brightness:
@@ -516,6 +518,9 @@ gst_v4l2_object_new (GstElement * element,
   v4l2object->n_v4l2_planes = 0;
 
   v4l2object->no_initial_format = FALSE;
+
+  v4l2object->disable_dynamic_buffer_alloc =
+      DEFAULT_PROP_DISABLE_DYNAMIC_BUFFER_ALLOC;
 
   /* We now disable libv4l2 by default, but have an env to enable it. */
 #ifdef HAVE_LIBV4L2
