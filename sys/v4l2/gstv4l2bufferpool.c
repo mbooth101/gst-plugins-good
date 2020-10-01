@@ -1716,6 +1716,12 @@ gst_v4l2_buffer_pool_create_dmabuf (GstV4l2MmngrBufferPool * mpool, gint v4l2fd,
     gst_buffer_append_memory (mmngrbuf, wa_mem[i]);
   }
 
+  if (pool->add_videometa)
+    gst_buffer_add_video_meta_full (mmngrbuf, GST_VIDEO_FRAME_FLAG_NONE,
+        GST_VIDEO_INFO_FORMAT (info), GST_VIDEO_INFO_WIDTH (info),
+        GST_VIDEO_INFO_HEIGHT (info), GST_VIDEO_INFO_N_PLANES (info),
+        info->offset, info->stride);
+
   mmngr_import_end_in_user_ext (importid);
 
   return mmngrbuf;
@@ -1727,18 +1733,20 @@ replace_output_buffer (GstBuffer ** buffer, GstV4l2MmngrBufferPool * mpool,
 {
   GstBuffer *mmngrbuf = NULL;
 
+  /* Replace v4l2 buffer by workaround buffer to send multi-plane for donwstream */
   g_return_val_if_fail (mpool->mmngr_bufs->len > index, GST_FLOW_ERROR);
 
   mmngrbuf = g_array_index (mpool->mmngr_bufs, GstBuffer *, index);
 
-  /* Replace v4l2 buffer by workaround buffer to send multi-plane for donwstream */
-  if (mmngrbuf) {
-    gst_buffer_copy_into (mmngrbuf, *buffer, GST_BUFFER_COPY_METADATA, 0, -1);
-    *buffer = mmngrbuf;
-  } else {
+  if (!mmngrbuf) {
     GST_ERROR_OBJECT (mpool, "Can not get workaround buffer");
     return FALSE;
   }
+
+  gst_buffer_copy_into (mmngrbuf, *buffer,
+      GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
+
+  *buffer = mmngrbuf;
 
   return TRUE;
 }
