@@ -2,6 +2,7 @@
  *
  * Copyright (C) 2001-2002 Ronald Bultje <rbultje@ronald.bitfreak.net>
  *               2006 Edgard Lima <edgard.lima@gmail.com>
+ * Copyright (C) 2017-2018, Renesas Electronics Corporation
  *
  * gstv4l2object.c: base class for V4L2 elements
  *
@@ -43,6 +44,7 @@
 
 #include <gst/video/video.h>
 #include <gst/allocators/gstdmabuf.h>
+#include "gstv4l2src.h"
 
 GST_DEBUG_CATEGORY_EXTERN (v4l2_debug);
 #define GST_CAT_DEFAULT v4l2_debug
@@ -52,6 +54,8 @@ GST_DEBUG_CATEGORY_EXTERN (v4l2_debug);
 #define DEFAULT_PROP_FLAGS              0
 #define DEFAULT_PROP_TV_NORM            0
 #define DEFAULT_PROP_IO_MODE            GST_V4L2_IO_AUTO
+#define DEFAULT_PROP_DISABLE_DYNAMIC_BUFFER_ALLOC    FALSE
+#define DEFAULT_PROP_NO_RESURECT_BUF    FALSE
 
 #define ENCODED_BUFFER_SIZE             (2 * 1024 * 1024)
 
@@ -317,6 +321,20 @@ gst_v4l2_object_install_properties_helper (GObjectClass * gobject_class,
       g_param_spec_flags ("flags", "Flags", "Device type flags",
           GST_TYPE_V4L2_DEVICE_FLAGS, DEFAULT_PROP_FLAGS,
           G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class,
+      PROP_DISABLE_DYNAMIC_BUFFER_ALLOC,
+      g_param_spec_boolean ("disable-dynamic-buffer-alloc",
+          "Disable dynamic buffer allocation",
+          "Flag for handling dynamic buffer allocation",
+          DEFAULT_PROP_DISABLE_DYNAMIC_BUFFER_ALLOC,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_NO_RESURECT_BUF,
+      g_param_spec_boolean ("no-resurect-buf",
+          "Disable dynamic buffer allocation",
+          "Flag for handling dynamic buffer allocation "
+          "(deprecated, now use disable-dynamic-buffer-alloc)",
+          DEFAULT_PROP_NO_RESURECT_BUF,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_DEPRECATED));
 
   /**
    * GstV4l2Src:brightness:
@@ -513,6 +531,9 @@ gst_v4l2_object_new (GstElement * element,
 
   v4l2object->no_initial_format = FALSE;
 
+  v4l2object->disable_dynamic_buffer_alloc =
+      DEFAULT_PROP_DISABLE_DYNAMIC_BUFFER_ALLOC;
+
   /* We now disable libv4l2 by default, but have an env to enable it. */
 #ifdef HAVE_LIBV4L2
   if (g_getenv ("GST_V4L2_USE_LIBV4L2")) {
@@ -705,6 +726,13 @@ gst_v4l2_object_set_property_helper (GstV4l2Object * v4l2object,
     case PROP_FORCE_ASPECT_RATIO:
       v4l2object->keep_aspect = g_value_get_boolean (value);
       break;
+    case PROP_NO_RESURECT_BUF:
+      GST_WARNING ("The option \"no-resurect-buf\" is deprecated."
+          " Now use the option \"disable_dynamic_buffer_alloc\"");
+      /* fall-through */
+    case PROP_DISABLE_DYNAMIC_BUFFER_ALLOC:
+      v4l2object->disable_dynamic_buffer_alloc = g_value_get_boolean (value);
+      break;
     default:
       return FALSE;
       break;
@@ -802,6 +830,11 @@ gst_v4l2_object_get_property_helper (GstV4l2Object * v4l2object,
     case PROP_FORCE_ASPECT_RATIO:
       g_value_set_boolean (value, v4l2object->keep_aspect);
       break;
+    case PROP_NO_RESURECT_BUF:
+      /* fall-through */
+    case PROP_DISABLE_DYNAMIC_BUFFER_ALLOC:
+      g_value_set_boolean (value, v4l2object->disable_dynamic_buffer_alloc);
+      break;
     default:
       return FALSE;
       break;
@@ -827,6 +860,15 @@ gst_v4l2_get_driver_min_buffers (GstV4l2Object * v4l2object)
     v4l2object->min_buffers = control.value;
   } else {
     v4l2object->min_buffers = 0;
+  }
+  if (GST_IS_V4L2SRC (v4l2object->element) == TRUE) {
+#ifdef CONT_FRAME_CAPTURE
+    /* RCarVIN driver support 2 transmission modes:
+     * Single frame capture mode: require 3 or less buffers
+     * Continuous frame capture mode: require 4 or more buffers
+     */
+    v4l2object->min_buffers = 4;
+#endif
   }
 }
 
@@ -856,6 +898,12 @@ gst_v4l2_set_defaults (GstV4l2Object * v4l2object)
           gst_v4l2_tuner_get_std_id_by_norm (v4l2object, norm);
       gst_tuner_norm_changed (tuner, norm);
     }
+#ifdef IGNORE_FPS_STANDARD
+    if (GST_IS_V4L2SRC (v4l2object->element) == TRUE) {
+      /* Keep v4l2object->tv_norm = 0 eventhough can get norm value from driver */
+      v4l2object->tv_norm = 0;
+    }
+#endif
   }
 
   if (v4l2object->channel)
@@ -3247,6 +3295,10 @@ gst_v4l2_object_set_format_full (GstV4l2Object * v4l2object, GstCaps * caps,
   GstVideoInfo info;
   GstVideoAlignment align;
   gint width, height, fps_n, fps_d;
+#ifdef IGNORE_FPS_STANDARD
+  gint tmpfps_n = 0;
+  gint tmpfps_d = 0;
+#endif
   gint n_v4l_planes;
   gint i = 0;
   gboolean is_mplane;
@@ -3277,6 +3329,12 @@ gst_v4l2_object_set_format_full (GstV4l2Object * v4l2object, GstCaps * caps,
   height = GST_VIDEO_INFO_HEIGHT (&info);
   fps_n = GST_VIDEO_INFO_FPS_N (&info);
   fps_d = GST_VIDEO_INFO_FPS_D (&info);
+#ifdef IGNORE_FPS_STANDARD
+  if (GST_IS_V4L2SRC (v4l2object->element) == TRUE) {
+    tmpfps_n = fps_n;
+    tmpfps_d = fps_d;
+  }
+#endif
 
   /* if encoded format (GST_VIDEO_INFO_N_PLANES return 0)
    * or if contiguous is prefered */
@@ -3734,6 +3792,12 @@ gst_v4l2_object_set_format_full (GstV4l2Object * v4l2object, GstCaps * caps,
   }
 
 done:
+#ifdef IGNORE_FPS_STANDARD
+  if (GST_IS_V4L2SRC (v4l2object->element) == TRUE) {
+    GST_VIDEO_INFO_FPS_N (&info) = tmpfps_n;
+    GST_VIDEO_INFO_FPS_D (&info) = tmpfps_d;
+  }
+#endif
   /* add boolean return, so we can fail on drivers bugs */
   gst_v4l2_object_save_format (v4l2object, fmtdesc, &format, &info, &align);
 
@@ -4422,6 +4486,15 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
       own_min += 2;
       gst_v4l2_buffer_pool_copy_at_threshold (GST_V4L2_BUFFER_POOL (pool),
           TRUE);
+      if (GST_IS_V4L2SRC (obj->element) == TRUE) {
+#ifdef CONT_FRAME_CAPTURE
+        /* FIXME: Incase downstream doesn't propose number of buffer to v4l2src
+         * (ex. tee, queue,...). Use default own_min = 5 (equal number of
+         * buffer on Renesas omx videoencoder)
+         */
+        own_min = 5;
+#endif
+      }
     } else {
       gst_v4l2_buffer_pool_copy_at_threshold (GST_V4L2_BUFFER_POOL (pool),
           FALSE);
@@ -4454,6 +4527,17 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
     GST_DEBUG_OBJECT (obj->dbg_obj, "activate Video Meta");
     gst_buffer_pool_config_add_option (config,
         GST_BUFFER_POOL_OPTION_VIDEO_META);
+  }
+
+  GST_INFO_OBJECT (obj->element, "Number of buffer allocated %d", own_min);
+  if ((GST_IS_V4L2SRC (obj->element) == TRUE) &&
+      (GST_V4L2SRC (obj->element)->num_alloc_buffer != 0xffffffff)) {
+    if ((obj->mode == GST_V4L2_IO_MMAP) || (obj->mode == GST_V4L2_IO_DMABUF)) {
+      own_min = GST_V4L2SRC (obj->element)->num_alloc_buffer;
+
+      GST_INFO_OBJECT (obj->element,
+          "Number of buffer allocated changed to %d", own_min);
+    }
   }
 
   gst_buffer_pool_config_set_allocator (config, allocator, &params);

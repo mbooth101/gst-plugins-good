@@ -364,6 +364,22 @@ if get_option('default_library') == 'shared'
   plugins_pkgconfig_install_dir = disabler()
 endif
 
+# check mmngrbuf library and function to use dmabuf exporter
+lib_mmngrbuf = cc.find_library('mmngrbuf', required : false)
+have_mmngrbuf = cc.has_function('mmngr_export_start_in_user', dependencies : lib_mmngrbuf)
+if have_mmngrbuf
+  cdata.set('HAVE_MMNGRBUF', 1)
+endif
+
+if get_option('ignore-fps-of-video-standard')
+  cdata.set('IGNORE_FPS_STANDARD', 1)
+endif
+
+
+if get_option('cont-frame-capture')
+  cdata.set('CONT_FRAME_CAPTURE', 1)
+endif
+
 subdir('gst')
 subdir('sys')
 subdir('ext')

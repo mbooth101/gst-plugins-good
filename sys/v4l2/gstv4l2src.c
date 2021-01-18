@@ -2,6 +2,7 @@
  *
  * Copyright (C) 2001-2002 Ronald Bultje <rbultje@ronald.bitfreak.net>
  *               2006 Edgard Lima <edgard.lima@gmail.com>
+ * Copyright (C) 2019, Renesas Electronics Corporation
  *
  * gstv4l2src.c: Video4Linux2 source element
  *
@@ -67,12 +68,18 @@ GST_DEBUG_CATEGORY (v4l2src_debug);
 #define GST_CAT_DEFAULT v4l2src_debug
 
 #define DEFAULT_PROP_DEVICE   "/dev/video0"
+#define DEFAULT_NUM_ALLOC_BUF   (0xffffffff)
 
 enum
 {
   PROP_0,
   V4L2_STD_OBJECT_PROPS,
-  PROP_LAST
+  PROP_LAST,
+  PROP_CROP_TOP,
+  PROP_CROP_LEFT,
+  PROP_CROP_WIDTH,
+  PROP_CROP_HEIGHT,
+  PROP_NUM_ALLOC_BUF
 };
 
 /* signals and args */
@@ -101,6 +108,7 @@ G_DEFINE_TYPE_WITH_CODE (GstV4l2Src, gst_v4l2src, GST_TYPE_PUSH_SRC,
         gst_v4l2src_video_orientation_interface_init));
 
 static void gst_v4l2src_finalize (GstV4l2Src * v4l2src);
+static gboolean gst_v4l2src_set_crop (GstV4l2Src * src);
 
 /* element methods */
 static GstStateChangeReturn gst_v4l2src_change_state (GstElement * element,
@@ -146,6 +154,33 @@ gst_v4l2src_class_init (GstV4l2SrcClass * klass)
 
   gst_v4l2_object_install_properties_helper (gobject_class,
       DEFAULT_PROP_DEVICE);
+
+  /*
+   * Crop options
+   */
+  g_object_class_install_property (gobject_class, PROP_CROP_TOP,
+      g_param_spec_int ("crop-top", "Vertical offset",
+          "The top corner of the CROP area ", 0, G_MAXINT, 0,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_CROP_LEFT,
+      g_param_spec_int ("crop-left", " Horizontal offset",
+          "The left corner of the CROP area ", 0, G_MAXINT, 0,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_CROP_WIDTH,
+      g_param_spec_int ("crop-width", "Width size",
+          "Width of the CROP area. 0: Equal with input width",
+          0, G_MAXINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_CROP_HEIGHT,
+      g_param_spec_int ("crop-height", "Height size",
+          "Height of the CROP area. 0: Equal with input height",
+          0, G_MAXINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_NUM_ALLOC_BUF,
+      g_param_spec_uint ("num-alloc-buffer",
+          "Number of buffer request to driver",
+          "Number of buffers will allocate (support for mmap and dmabuf io-mode)"
+          "If the number is out of support of driver, it will be adjusted (0xffffffff=auto)",
+          GST_V4L2_MIN_BUFFERS, G_MAXUINT, DEFAULT_NUM_ALLOC_BUF,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
    * GstV4l2Src::prepare-format:
@@ -205,6 +240,8 @@ gst_v4l2src_init (GstV4l2Src * v4l2src)
 
   gst_base_src_set_format (GST_BASE_SRC (v4l2src), GST_FORMAT_TIME);
   gst_base_src_set_live (GST_BASE_SRC (v4l2src), TRUE);
+
+  v4l2src->num_alloc_buffer = DEFAULT_NUM_ALLOC_BUF;
 }
 
 
@@ -226,6 +263,21 @@ gst_v4l2src_set_property (GObject * object,
   if (!gst_v4l2_object_set_property_helper (v4l2src->v4l2object,
           prop_id, value, pspec)) {
     switch (prop_id) {
+      case PROP_CROP_TOP:
+        v4l2src->crop.top = g_value_get_int (value);
+        break;
+      case PROP_CROP_LEFT:
+        v4l2src->crop.left = g_value_get_int (value);
+        break;
+      case PROP_CROP_WIDTH:
+        v4l2src->crop.width = g_value_get_int (value);
+        break;
+      case PROP_CROP_HEIGHT:
+        v4l2src->crop.height = g_value_get_int (value);
+        break;
+      case PROP_NUM_ALLOC_BUF:
+        v4l2src->num_alloc_buffer = g_value_get_uint (value);
+        break;
       default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
         break;
@@ -242,6 +294,21 @@ gst_v4l2src_get_property (GObject * object,
   if (!gst_v4l2_object_get_property_helper (v4l2src->v4l2object,
           prop_id, value, pspec)) {
     switch (prop_id) {
+      case PROP_CROP_TOP:
+        g_value_set_int (value, v4l2src->crop.top);
+        break;
+      case PROP_CROP_LEFT:
+        g_value_set_int (value, v4l2src->crop.left);
+        break;
+      case PROP_CROP_WIDTH:
+        g_value_set_int (value, v4l2src->crop.width);
+        break;
+      case PROP_CROP_HEIGHT:
+        g_value_set_int (value, v4l2src->crop.height);
+        break;
+      case PROP_NUM_ALLOC_BUF:
+        g_value_set_uint (value, v4l2src->num_alloc_buffer);
+        break;
       default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
         break;
@@ -386,7 +453,32 @@ gst_v4l2src_set_format (GstV4l2Src * v4l2src, GstCaps * caps,
   g_signal_emit (v4l2src, gst_v4l2_signals[SIGNAL_PRE_SET_FORMAT], 0,
       v4l2src->v4l2object->video_fd, caps);
 
+  /* Care about crop if driver has supported capability of crop (CROPCAP) */
+  if ((v4l2src->in_size.width > 0) && (v4l2src->in_size.height > 0)) {
+    gst_v4l2src_set_crop (v4l2src);
+  }
+
   return gst_v4l2_object_set_format (obj, caps, error);
+}
+
+static gboolean
+gst_v4l2src_get_input_size_info (GstV4l2Src * src)
+{
+  GstV4l2Object *obj;
+  struct v4l2_cropcap cropcap = { 0 };
+
+  obj = src->v4l2object;
+
+  /* Currently, get information of input resolution through cropcap callback */
+  cropcap.type = obj->type;
+  if (obj->ioctl (src->v4l2object->video_fd, VIDIOC_CROPCAP, &cropcap) < 0) {
+    GST_ERROR_OBJECT (src, "Cropcap fail, CROPCAP has not supported");
+    return FALSE;
+  }
+  src->in_size.width = cropcap.defrect.width;
+  src->in_size.height = cropcap.defrect.height;
+
+  return TRUE;
 }
 
 static GstCaps *
@@ -403,9 +495,15 @@ gst_v4l2src_fixate (GstBaseSrc * basesrc, GstCaps * caps, GstStructure * pref_s)
   gint i = G_MAXINT;
   GstV4l2Error error = GST_V4L2_ERROR_INIT;
   GstCaps *fcaps = NULL;
+  gboolean ret;
 
   GST_DEBUG_OBJECT (basesrc, "fixating caps %" GST_PTR_FORMAT, caps);
 
+  ret = gst_v4l2src_get_input_size_info (v4l2src);
+  if (ret) {
+    pref.width = v4l2src->in_size.width;
+    pref.height = v4l2src->in_size.height;
+  }
   /* We consider the first structure from peercaps to be a preference. This is
    * useful for matching a reported native display, or simply to avoid
    * transformation to happen downstream. */
@@ -594,6 +692,38 @@ gst_v4l2src_get_caps (GstBaseSrc * src, GstCaps * filter)
   }
 
   return gst_v4l2_object_get_caps (obj, filter);
+}
+
+static gboolean
+gst_v4l2src_set_crop (GstV4l2Src * src)
+{
+  GstV4l2Object *obj;
+  struct v4l2_crop crop;
+
+  obj = src->v4l2object;
+
+  memset (&crop, 0, sizeof (crop));
+  crop.type = obj->type;
+
+  if (src->crop.width == 0)
+    src->crop.width = src->in_size.width;
+
+  if (src->crop.height == 0)
+    src->crop.height = src->in_size.height;
+
+  crop.c.top = src->crop.top;
+  crop.c.left = src->crop.left;
+  crop.c.width = src->crop.width;
+  crop.c.height = src->crop.height;
+
+  if (obj->ioctl (src->v4l2object->video_fd, VIDIOC_S_CROP, &crop) < 0) {
+    GST_ERROR_OBJECT (src, "Fail to set crop");
+    return FALSE;
+  }
+  GST_DEBUG_OBJECT (src,
+      "crop image: crop top %d crop left %d crop width %d crop height %d",
+      crop.c.top, crop.c.left, crop.c.width, crop.c.height);
+  return TRUE;
 }
 
 static gboolean
@@ -829,6 +959,10 @@ gst_v4l2src_create (GstPushSrc * src, GstBuffer ** buf)
   GstClockTime abs_time, base_time, timestamp, duration;
   GstClockTime delay;
   GstMessage *qos_msg;
+  GstBuffer **buf_v4l2 = buf;
+#ifdef HAVE_MMNGRBUF
+  GstBuffer *pbuf = NULL;
+#endif
 
   do {
     ret = GST_BASE_SRC_CLASS (parent_class)->alloc (GST_BASE_SRC (src), 0,
@@ -837,7 +971,18 @@ gst_v4l2src_create (GstPushSrc * src, GstBuffer ** buf)
     if (G_UNLIKELY (ret != GST_FLOW_OK))
       goto alloc_failed;
 
-    ret = gst_v4l2_buffer_pool_process (pool, buf);
+#ifdef HAVE_MMNGRBUF
+    if (GST_IS_V4L2_MMNGR_BUFFER_POOL (obj->pool)) {
+      pbuf = gst_mini_object_get_qdata (GST_MINI_OBJECT (*buf),
+          GST_V4L2_MMNGR_EXPORT_QUARK);
+      if (!pbuf)
+        goto alloc_failed;
+
+      buf_v4l2 = &pbuf;
+    }
+#endif
+
+    ret = gst_v4l2_buffer_pool_process (pool, buf_v4l2);
 
   } while (ret == GST_V4L2_FLOW_CORRUPTED_BUFFER);
 

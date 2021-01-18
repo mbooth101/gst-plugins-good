@@ -336,6 +336,35 @@ AG_GST_SET_PACKAGE_RELEASE_DATETIME_WITH_NANO([$PACKAGE_VERSION_NANO],
   ["${srcdir}/gst-plugins-good.doap"],
   [$PACKAGE_VERSION_MAJOR.$PACKAGE_VERSION_MINOR.$PACKAGE_VERSION_MICRO])
 
+dnl check for continuous frame capture mode
+AC_ARG_ENABLE([cont-frame-capture],
+             [AS_HELP_STRING([--enable-cont-frame-capture],
+                             [Enable continuous frame capture mode])],
+             [enable_cont_fr_capture=yes],
+             []
+             )
+if test "x${enable_cont_fr_capture}" = "xyes"; then
+  AC_DEFINE(CONT_FRAME_CAPTURE, 1, [Define if you enable option --enable-cont-frame-capture])
+fi
+
+dnl ignore fps of video standard (norm option)
+AC_ARG_ENABLE([ignore-fps-of-video-standard],
+             [AS_HELP_STRING([--enable-ignore-fps-of-video-standard],
+                             [Ignore video standard framerate when norm option is 0])],
+             [ignore_fps_standard=yes],
+             []
+             )
+if test "x${ignore_fps_standard}" = "xyes"; then
+  AC_DEFINE(IGNORE_FPS_STANDARD, 1, [Define if you enable option --enable-ignore-fps-of-video-standard])
+fi
+
+
+dnl check mmngrbuf library to use dmabuf exporter
+AC_CHECK_LIB([mmngrbuf], [mmngr_export_start_in_user],
+  [AC_DEFINE(HAVE_MMNGRBUF, 1, [Define if you have mmngrbuf library])
+     GST_LIBS="$GST_LIBS -lmmngrbuf"
+  ])
+
 # set by AG_GST_PARSE_SUBSYSTEM_DISABLES above
 dnl make sure it doesn't complain about unused variables if debugging is disabled
 NO_WARNINGS=""
