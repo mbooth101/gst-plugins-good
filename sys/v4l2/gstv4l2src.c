@@ -2,7 +2,7 @@
  *
  * Copyright (C) 2001-2002 Ronald Bultje <rbultje@ronald.bitfreak.net>
  *               2006 Edgard Lima <edgard.lima@gmail.com>
- * Copyright (C) 2019, Renesas Electronics Corporation
+ * Copyright (C) 2019-2021, Renesas Electronics Corporation
  *
  * gstv4l2src.c: Video4Linux2 source element
  *
@@ -1025,11 +1025,13 @@ retry:
     gstnow = GST_TIMESPEC_TO_TIME (now);
 
     if (timestamp > gstnow || (gstnow - timestamp) > (10 * GST_SECOND)) {
-      GTimeVal now;
+      gint64 now;
 
       /* very large diff, fall back to system time */
-      g_get_current_time (&now);
-      gstnow = GST_TIMEVAL_TO_TIME (now);
+      now = g_get_real_time ();
+      if (now > 0)
+        gstnow = (GstClockTime) (now * 1000);
+
     }
 
     /* Detect buggy drivers here, and stop using their timestamp. Failing any
